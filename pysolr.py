@@ -1669,3 +1669,213 @@ class ZooKeeper(object):
 
     def getLeaderURL(self, collname):
         return self.getRandomURL(collname, only_leader=True)
+
+
+class SolrCollectionAdmin(object):
+    """
+    Handles collection admin operations: see https://solr.apache.org/guide/8_10/collection-management.html#create
+
+    This must be initialized with the full admin collections URL::
+
+        solr_admin = SolrCoreAdmin('http://localhost:8983/solr/admin/collections')
+        status = solr_admin.status()
+
+    Operations offered by Solr are:
+       1. COLSTATUS
+       2. CREATE
+       3. RELOAD
+       4. MODIFYCOLLECTION
+       5. LIST
+       6. RENAME
+       7. COLLECTIONPROP
+       8. MIGRATE (Not implemented right now)
+       9. REINDEXCOLLECTION
+      10. COLSTATUS
+      11. BACKUP (Not implemented right now)
+      12. LISTBACKUP (Not implemented right now)
+      13. RESTORE (Not implemented right now)
+      14. DELETEBACKUP (Not implemented right now)
+      15. REBLANCELEADERS (Not implemented right now)
+    """
+
+    def __init__(self, url, *args, **kwargs):
+        super(SolrCollectionAdmin, self).__init__(*args, **kwargs)
+        self.url = url
+
+    def _get_url(self, url, params=None, headers=None):
+        if params is None:
+            params = {}
+        if headers is None:
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        resp = requests.get(url, data=safe_urlencode(params), headers=headers)
+        return force_unicode(resp.content)
+
+    def colstatus(self, collection=None, core_info=True, segments=True, field_info=True, size_info=True):
+        """
+        Get collection status information
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#create
+        """
+
+        params = {
+            "action": "COLSTATUS",
+            "collection": collection,
+            "coreInfo": core_info,
+            "segments": segments,
+            "fieldInfo": field_info,
+            "sizeInfo": size_info,
+        }
+
+        return self._get_url(self.url, params=params)
+
+    def create(self, name, num_shards=1, replication_factor=1):
+        """
+        https://solr.apache.org/guide/8_10/collection-management.html#create
+
+        """
+        params = {
+            "action": "CREATE",
+            "name": name,
+            "numShards": num_shards,
+            "replicationFactor": replication_factor,
+        }
+
+        if instance_dir is None:
+            params.update(instanceDir=name)
+        else:
+            params.update(instanceDir=instance_dir)
+
+        return self._get_url(self.url, params=params)
+
+
+    def delete(self, name, is_async=False):
+        """
+        Delete a collection
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#delete
+        """
+
+        params = {"action": "DELETE", "name": name, "async": is_async}
+        return self._get_url(self.url, params=params)
+
+
+    def list(self):
+        """
+        List Collections
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#list
+        """
+
+        params = {"action": "LIST"}
+        return self._get_url(self.url, params=params)
+
+
+    MODIFY_CHOICES = [
+        "maxShardsPerNode",
+        "replicationFactor",
+        "autoAddReplicas",
+        "collection.configName",
+        "rule",
+        "snitch",
+        "policy",
+        "withCollection",
+        "readOnly",
+        "async"
+    ]
+
+    def modify(self, collection, attributes):
+        """
+
+        Modify Attributes of a Collection
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#modifycollection
+
+        * attributes is a dict of attributes keys: attribute values
+
+
+        It’s possible to edit multiple attributes at a time. Changing these values only updates the z-node on ZooKeeper, they do not change the topology of the collection. For instance, increasing replicationFactor will not automatically add more replicas to the collection but will allow more ADDREPLICA commands to succeed.
+        """
+
+        # At least one attribute is required
+        if type(attributes) is not dict or len(attributes) == 0:
+            raise Exception("Attributes must be a dict with at least one key")
+
+        for key in attributes.keys():
+            if not key in self.MODIFY_CHOICES and not key.startswith("property."):
+                raise Exception(f"Attributes keys must be one of {"|".join(self.MODIFY_CHOICES)} or start with 'property.'")
+
+
+        params = {
+            "collection": collection,
+        } | attributes
+
+        return self._get_url(self.url, params=params)
+
+    def property(self, name, property_name, property_value):
+        """
+        Add, edit or delete a collection property
+        Call with property_value=Null to delete
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#collectionprop
+        """
+
+        params = {
+            "action": "COLLECTIONPROP",
+            "name": name,
+            "propertyName": property_name,
+            "propertyValue": property_value,
+        }
+
+        return self._get_url(self.url, params=params)
+
+    REINDEX_COMMANDS = [
+        REINDEX_START := "start",
+        REINDEX_ABORT := "abort",
+        REINDEX_STATUS := "status",
+    ]
+
+    def reindex(self, name, cmd=REINDEX_START, target=None, q="*:*", fl="*", config_name=None, remove_source=False, is_async=False):
+        """
+        Reindex a collection
+
+        See: https://solr.apache.org/guide/8_10/collection-management.html#reindexcollection
+
+        """
+
+        if cmd not in self.REINDEX_COMMANDS:
+            raise Exception(f"Invalid reindex command '{cmd}', must be {" | ".join(self.REINDEX_COMMANDS)}")
+
+        params = {
+            "action": "RENAME",
+            "name": name,
+            "cmd": cmd,
+            "target": target,
+            "q": q,
+            "fl": fl,
+            "configName": config_name,
+            "removeSource": remove_source,
+            "async": is_async,
+
+        }
+        return self._get_url(self.url, params=params)
+
+    def reload(self, name, use_async=False):  # NOQA: A003
+        """
+        Reload a collection
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#reload
+        """
+        params = {"action": "RELOAD", "name": name, "async": use_async}
+        return self._get_url(self.url, params=params)
+
+
+    def rename(self, name, target):
+        """
+        Rename a collection
+
+        See https://solr.apache.org/guide/8_10/collection-management.html#rename
+        """
+        params = {"action": "RENAME", "name": name, "target": target}
+        return self._get_url(self.url, params=params)
+
